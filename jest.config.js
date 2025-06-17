@@ -1,9 +1,20 @@
+/** @type {import('ts-jest').JestConfigWithTsJest} */
 export default {
   preset: "ts-jest/presets/default-esm",
+  testEnvironment: "node",
   extensionsToTreatAsEsm: [".ts"],
-  moduleNameMapping: {
-    "^(\\\\.{1,2}/.*)\\\\.js$": "$1",
+  moduleNameMapper: {
+    "^(\.\.?/.*)\.js$": "$1",
   },
+  transform: {
+    "^.+\\.tsx?$": ["ts-jest", {
+      useESM: true,
+      tsconfig: "tsconfig.json"
+    }]
+  },
+  transformIgnorePatterns: [
+    "node_modules/(?!(@modelcontextprotocol)/)"
+  ],
   testEnvironment: "node",
   roots: ["<rootDir>/src", "<rootDir>/__tests__"],
   testMatch: [
