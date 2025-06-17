@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "follow-plan": {
+      "command": "npx", 
+      "args": ["-y", "follow-plan-mcp", "/path/to/your/project"]
+    }
+  }
+}
