@@ -63,10 +63,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Marco Antonio Gonzalez Junior/follow-plan-mcp.git"
+    "url": "git+https://github.com/vibeclasses/follow-plan-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/Marco Antonio Gonzalez Junior/follow-plan-mcp/issues"
+    "url": "https://github.com/vibeclasses/follow-plan-mcp/issues"
   },
-  "homepage": "https://github.com/Marco Antonio Gonzalez Junior/follow-plan-mcp#readme"
+  "homepage": "https://github.com/vibeclasses/follow-plan-mcp#readme"
 }
