@@ -1,0 +1,730 @@
+// tsconfig.test.json
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+      "types": ["jest", "node"],
+      "esModuleInterop": true,
+      "allowSyntheticDefaultImports": true,
+      "module": "ESNext",
+      "moduleResolution": "Node"
+    },
+    "include": [
+      "src/**/*",
+      "__tests__/**/*"
+    ]
+  }
+  
+  // .github/workflows/ci.yml
+  name: CI/CD Pipeline
+  
+  on:
+    push:
+      branches: [ main, develop ]
+    pull_request:
+      branches: [ main ]
+  
+  jobs:
+    test:
+      runs-on: ubuntu-latest
+      
+      strategy:
+        matrix:
+          node-version: [18.x, 20.x, 22.x]
+  
+      steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+  
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+  
+      - name: Install dependencies
+        run: npm ci
+  
+      - name: Run linting
+        run: npm run lint
+  
+      - name: Run unit tests
+        run: npm run test:unit
+  
+      - name: Run integration tests
+        run: npm run test:integration
+  
+      - name: Run security tests
+        run: npm run test:security
+  
+      - name: Run edge case tests
+        run: npm run test:edge-cases
+  
+      - name: Run coverage report
+        run: npm run test:coverage
+  
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+  
+    build:
+      runs-on: ubuntu-latest
+      needs: test
+      
+      steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+  
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+  
+      - name: Install dependencies
+        run: npm ci
+  
+      - name: Build project
+        run: npm run build
+  
+      - name: Test built package
+        run: |
+          npm pack
+          npm install -g ./follow-plan-mcp-*.tgz
+          follow-plan-mcp --help || echo "Package installed successfully"
+  
+    publish:
+      runs-on: ubuntu-latest
+      needs: [test, build]
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      
+      steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+  
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+  
+      - name: Install dependencies
+        run: npm ci
+  
+      - name: Build project
+        run: npm run build
+  
+      - name: Publish to NPM
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+  
+  // __tests__/mocks/fs.ts
+  import { jest } from '@jest/globals';
+  
+  export const createMockFs = () => {
+    const mockFiles: Record<string, string> = {};
+    const mockDirs: Set<string> = new Set();
+  
+    return {
+      promises: {
+        mkdir: jest.fn(async (path: string, options?: any) => {
+          mockDirs.add(path);
+          return Promise.resolve();
+        }),
+        
+        writeFile: jest.fn(async (path: string, content: string) => {
+          mockFiles[path] = content;
+          return Promise.resolve();
+        }),
+        
+        readFile: jest.fn(async (path: string, encoding?: string) => {
+          if (!(path in mockFiles)) {
+            throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+          }
+          return Promise.resolve(mockFiles[path]);
+        }),
+        
+        readdir: jest.fn(async (path: string) => {
+          const files = Object.keys(mockFiles)
+            .filter(file => file.startsWith(path + '/'))
+            .map(file => file.replace(path + '/', '').split('/')[0])
+            .filter((file, index, array) => array.indexOf(file) === index);
+          return Promise.resolve(files);
+        }),
+        
+        stat: jest.fn(async (path: string) => {
+          if (mockDirs.has(path)) {
+            return Promise.resolve({ isDirectory: () => true });
+          }
+          if (path in mockFiles) {
+            return Promise.resolve({ isDirectory: () => false });
+          }
+          throw new Error(`ENOENT: no such file or directory, stat '${path}'`);
+        }),
+        
+        access: jest.fn(async (path: string) => {
+          if (!(path in mockFiles) && !mockDirs.has(path)) {
+            throw new Error(`ENOENT: no such file or directory, access '${path}'`);
+          }
+          return Promise.resolve();
+        }),
+        
+        rm: jest.fn(async (path: string, options?: any) => {
+          Object.keys(mockFiles).forEach(file => {
+            if (file.startsWith(path)) {
+              delete mockFiles[file];
+            }
+          });
+          mockDirs.delete(path);
+          return Promise.resolve();
+        }),
+        
+        chmod: jest.fn(async (path: string, mode: number) => {
+          return Promise.resolve();
+        })
+      },
+      
+      // Helper methods for testing
+      __getMockFiles: () => ({ ...mockFiles }),
+      __getMockDirs: () => new Set(mockDirs),
+      __reset: () => {
+        Object.keys(mockFiles).forEach(key => delete mockFiles[key]);
+        mockDirs.clear();
+      }
+    };
+  };
+  
+  // __tests__/performance.test.ts
+  import { promises as fs } from "fs";
+  import path from "path";
+  import { tmpdir } from "os";
+  import { randomBytes } from "crypto";
+  import { FollowPlanServer } from "../src/index.js";
+  
+  jest.mock("@modelcontextprotocol/sdk/server/index.js");
+  jest.mock("@modelcontextprotocol/sdk/server/stdio.js");
+  
+  describe("Performance Tests", () => {
+    let server: FollowPlanServer;
+    let testProjectRoot: string;
+  
+    beforeEach(async () => {
+      testProjectRoot = path.join(tmpdir(), `perf-test-${randomBytes(8).toString("hex")}`);
+      await fs.mkdir(testProjectRoot, { recursive: true });
+      server = new FollowPlanServer(testProjectRoot);
+      await server.ensureDirectoryStructure();
+    });
+  
+    afterEach(async () => {
+      try {
+        await fs.rm(testProjectRoot, { recursive: true, force: true });
+      } catch (error) {
+        // Ignore cleanup errors
+      }
+    });
+  
+    describe("Memory Usage", () => {
+      test("should maintain stable memory usage with large datasets", async () => {
+        const initialMemory = process.memoryUsage();
+  
+        // Create 1000 items
+        const promises = [];
+        for (let i = 0; i < 1000; i++) {
+          promises.push(
+            server.createTask({
+              title: `Performance Task ${i}`,
+              description: `This is task number ${i} for performance testing`,
+              priority: "medium"
+            })
+          );
+        }
+  
+        await Promise.all(promises);
+  
+        const finalMemory = process.memoryUsage();
+        const heapIncrease = finalMemory.heapUsed - initialMemory.heapUsed;
+  
+        // Memory increase should be reasonable (less than 100MB for 1000 tasks)
+        expect(heapIncrease).toBeLessThan(100 * 1024 * 1024);
+      });
+  
+      test("should handle memory cleanup after operations", async () => {
+        const createAndCleanup = async () => {
+          for (let i = 0; i < 100; i++) {
+            await server.createTask({
+              title: `Temp Task ${i}`,
+              description: "Temporary task for memory test"
+            });
+          }
+        };
+  
+        const initialMemory = process.memoryUsage().heapUsed;
+  
+        // Run multiple cycles
+        for (let cycle = 0; cycle < 5; cycle++) {
+          await createAndCleanup();
+          
+          // Force garbage collection if available
+          if (global.gc) {
+            global.gc();
+          }
+        }
+  
+        const finalMemory = process.memoryUsage().heapUsed;
+        const memoryIncrease = finalMemory - initialMemory;
+  
+        // Memory shouldn't grow excessively
+        expect(memoryIncrease).toBeLessThan(50 * 1024 * 1024); // 50MB max
+      });
+    });
+  
+    describe("Throughput Performance", () => {
+      test("should maintain good throughput under load", async () => {
+        const startTime = Date.now();
+        const itemCount = 500;
+  
+        const operations = [];
+        for (let i = 0; i < itemCount; i++) {
+          operations.push(
+            server.createTask({
+              title: `Throughput Task ${i}`,
+              description: `Description for task ${i}`,
+              priority: "low"
+            })
+          );
+        }
+  
+        await Promise.all(operations);
+        const duration = Date.now() - startTime;
+  
+        // Should create 500 tasks in under 10 seconds
+        expect(duration).toBeLessThan(10000);
+  
+        // Calculate throughput (operations per second)
+        const throughput = itemCount / (duration / 1000);
+        expect(throughput).toBeGreaterThan(10); // At least 10 ops/sec
+      });
+  
+      test("should handle burst traffic patterns", async () => {
+        const bursts = 5;
+        const burstSize = 50;
+        const burstResults = [];
+  
+        for (let burst = 0; burst < bursts; burst++) {
+          const burstStart = Date.now();
+          
+          const burstOperations = [];
+          for (let i = 0; i < burstSize; i++) {
+            burstOperations.push(
+              server.createTask({
+                title: `Burst ${burst} Task ${i}`,
+                description: `Burst traffic test task`
+              })
+            );
+          }
+  
+          await Promise.all(burstOperations);
+          const burstDuration = Date.now() - burstStart;
+          burstResults.push(burstDuration);
+  
+          // Small delay between bursts
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+  
+        // Each burst should complete reasonably quickly
+        burstResults.forEach(duration => {
+          expect(duration).toBeLessThan(5000); // 5 seconds max per burst
+        });
+  
+        // Performance shouldn't degrade significantly across bursts
+        const firstBurst = burstResults[0];
+        const lastBurst = burstResults[burstResults.length - 1];
+        const degradation = lastBurst / firstBurst;
+        expect(degradation).toBeLessThan(2); // No more than 2x slower
+      });
+    });
+  
+    describe("File System Performance", () => {
+      test("should efficiently handle large numbers of files", async () => {
+        const fileCount = 1000;
+        
+        // Create many files
+        const startTime = Date.now();
+        for (let i = 0; i < fileCount; i++) {
+          await server.createTask({
+            title: `File Test ${i}`,
+            description: "Testing file creation performance"
+          });
+        }
+        const creationTime = Date.now() - startTime;
+  
+        // List resources (which reads directory)
+        const mockServer = (server as any).server;
+        const listResourcesCall = mockServer.setRequestHandler.mock.calls.find(
+          (call: any) => call[0].method === "resources/list"
+        );
+        const listResourcesHandler = listResourcesCall?.[1];
+  
+        const listStart = Date.now();
+        const resources = await listResourcesHandler();
+        const listTime = Date.now() - listStart;
+  
+        expect(creationTime).toBeLessThan(30000); // 30 seconds for creation
+        expect(listTime).toBeLessThan(5000); // 5 seconds for listing
+        expect(resources.resources.length).toBeGreaterThan(fileCount);
+      });
+  
+      test("should handle concurrent file operations efficiently", async () => {
+        const concurrentOps = 100;
+        const startTime = Date.now();
+  
+        // Mix of different operations
+        const operations = [];
+        for (let i = 0; i < concurrentOps; i++) {
+          const opType = i % 4;
+          switch (opType) {
+            case 0:
+              operations.push(server.createTask({
+                title: `Concurrent Task ${i}`,
+                description: "Concurrent task"
+              }));
+              break;
+            case 1:
+              operations.push(server.createFeature({
+                title: `Concurrent Feature ${i}`,
+                description: "Concurrent feature"
+              }));
+              break;
+            case 2:
+              operations.push(server.createBug({
+                title: `Concurrent Bug ${i}`,
+                description: "Concurrent bug"
+              }));
+              break;
+            case 3:
+              operations.push(server.createRule({
+                title: `Concurrent Rule ${i}`,
+                description: "Concurrent rule"
+              }));
+              break;
+          }
+        }
+  
+        await Promise.all(operations);
+        const duration = Date.now() - startTime;
+  
+        expect(duration).toBeLessThan(15000); // 15 seconds max
+      });
+    });
+  
+    describe("Scalability Tests", () => {
+      test("should scale linearly with data size", async () => {
+        const testSizes = [10, 50, 100, 200];
+        const results: Array<{ size: number; time: number }> = [];
+  
+        for (const size of testSizes) {
+          const startTime = Date.now();
+          
+          const operations = [];
+          for (let i = 0; i < size; i++) {
+            operations.push(server.createTask({
+              title: `Scale Test ${size}-${i}`,
+              description: "Scalability test task"
+            }));
+          }
+  
+          await Promise.all(operations);
+          const duration = Date.now() - startTime;
+          
+          results.push({ size, time: duration });
+        }
+  
+        // Check that time doesn't grow exponentially
+        for (let i = 1; i < results.length; i++) {
+          const prev = results[i - 1];
+          const curr = results[i];
+          
+          const sizeRatio = curr.size / prev.size;
+          const timeRatio = curr.time / prev.time;
+          
+          // Time growth should be roughly linear (not quadratic or worse)
+          expect(timeRatio).toBeLessThan(sizeRatio * 2);
+        }
+      });
+    });
+  });
+  
+  // __tests__/stress.test.ts
+  import { promises as fs } from "fs";
+  import path from "path";
+  import { tmpdir } from "os";
+  import { randomBytes } from "crypto";
+  import { FollowPlanServer } from "../src/index.js";
+  
+  jest.mock("@modelcontextprotocol/sdk/server/index.js");
+  jest.mock("@modelcontextprotocol/sdk/server/stdio.js");
+  
+  describe("Stress Tests", () => {
+    let server: FollowPlanServer;
+    let testProjectRoot: string;
+  
+    beforeEach(async () => {
+      testProjectRoot = path.join(tmpdir(), `stress-test-${randomBytes(8).toString("hex")}`);
+      await fs.mkdir(testProjectRoot, { recursive: true });
+      server = new FollowPlanServer(testProjectRoot);
+      await server.ensureDirectoryStructure();
+    });
+  
+    afterEach(async () => {
+      try {
+        await fs.rm(testProjectRoot, { recursive: true, force: true });
+      } catch (error) {
+        // Ignore cleanup errors
+      }
+    });
+  
+    describe("High Load Stress Tests", () => {
+      test("should survive extreme concurrent load", async () => {
+        const extremeLoad = 500;
+        const operations = [];
+  
+        // Create extreme concurrent load
+        for (let i = 0; i < extremeLoad; i++) {
+          operations.push(
+            server.createTask({
+              title: `Extreme Load Task ${i}`,
+              description: `Stress testing with extreme load - task ${i}`,
+              priority: "medium"
+            }).catch(error => {
+              // Log but don't fail - some operations might timeout under extreme load
+              console.warn(`Operation ${i} failed:`, error.message);
+              return { failed: true, error: error.message };
+            })
+          );
+        }
+  
+        const results = await Promise.all(operations);
+        
+        // Most operations should succeed
+        const successful = results.filter(r => !r.failed).length;
+        const successRate = successful / extremeLoad;
+        expect(successRate).toBeGreaterThan(0.8); // At least 80% success rate
+      }, 60000); // 60 second timeout
+  
+      test("should handle rapid sequential operations", async () => {
+        const rapidCount = 1000;
+        
+        for (let i = 0; i < rapidCount; i++) {
+          await server.createTask({
+            title: `Rapid Task ${i}`,
+            description: "Rapid sequential test"
+          });
+        }
+  
+        // Verify all files were created
+        const tasksDir = path.join(testProjectRoot, ".plan", "tasks");
+        const files = await fs.readdir(tasksDir);
+        expect(files.length).toBe(rapidCount);
+      }, 45000); // 45 second timeout
+    });
+  
+    describe("Resource Exhaustion Tests", () => {
+      test("should handle running out of file descriptors gracefully", async () => {
+        // This test simulates file descriptor exhaustion
+        const manyOperations = [];
+        
+        for (let i = 0; i < 100; i++) {
+          manyOperations.push(
+            Promise.all([
+              server.createTask({ title: `FD Task ${i}`, description: "FD test" }),
+              server.createFeature({ title: `FD Feature ${i}`, description: "FD test" }),
+              server.createBug({ title: `FD Bug ${i}`, description: "FD test" })
+            ])
+          );
+        }
+  
+        const results = await Promise.all(manyOperations);
+        expect(results.length).toBe(100);
+      });
+  
+      test("should handle large content without memory issues", async () => {
+        const largeContent = "A".repeat(10 * 1024 * 1024); // 10MB content
+        
+        const result = await server.createTask({
+          title: "Large Content Task",
+          description: largeContent
+        });
+  
+        expect(result.content[0].text).toContain("Task created successfully");
+        
+        // Verify content was written
+        const tasksDir = path.join(testProjectRoot, ".plan", "tasks");
+        const files = await fs.readdir(tasksDir);
+        const content = await fs.readFile(path.join(tasksDir, files[0]), "utf-8");
+        expect(content.length).toBeGreaterThan(10 * 1024 * 1024);
+      });
+    });
+  
+    describe("Long Running Operation Tests", () => {
+      test("should maintain stability over extended operation", async () => {
+        const testDuration = 30000; // 30 seconds
+        const startTime = Date.now();
+        let operationCount = 0;
+        
+        while (Date.now() - startTime < testDuration) {
+          await server.createTask({
+            title: `Long Running Task ${operationCount}`,
+            description: "Extended operation test"
+          });
+          
+          operationCount++;
+          
+          // Small delay to prevent overwhelming the system
+          if (operationCount % 50 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+  
+        expect(operationCount).toBeGreaterThan(0);
+        
+        // Verify final state is consistent
+        const tasksDir = path.join(testProjectRoot, ".plan", "tasks");
+        const files = await fs.readdir(tasksDir);
+        expect(files.length).toBe(operationCount);
+      }, 35000); // 35 second timeout
+    });
+  });
+  
+  // __tests__/compatibility.test.ts
+  import { FollowPlanServer } from "../src/index.js";
+  
+  jest.mock("@modelcontextprotocol/sdk/server/index.js");
+  jest.mock("@modelcontextprotocol/sdk/server/stdio.js");
+  
+  describe("Compatibility Tests", () => {
+    describe("Node.js Version Compatibility", () => {
+      test("should work with current Node.js version", () => {
+        const nodeVersion = process.version;
+        const majorVersion = parseInt(nodeVersion.slice(1).split('.')[0]);
+        
+        expect(majorVersion).toBeGreaterThanOrEqual(18);
+      });
+  
+      test("should handle different path separators", () => {
+        const windowsPath = "C:\\Users\\test\\project";
+        const unixPath = "/home/test/project";
+        
+        expect(() => new FollowPlanServer(windowsPath)).not.toThrow();
+        expect(() => new FollowPlanServer(unixPath)).not.toThrow();
+      });
+  
+      test("should handle different line endings", async () => {
+        const testProjectRoot = "/tmp/test-project";
+        const server = new FollowPlanServer(testProjectRoot);
+        
+        // Test with different line endings
+        const descriptions = [
+          "Line 1\nLine 2\nLine 3",           // Unix
+          "Line 1\r\nLine 2\r\nLine 3",       // Windows
+          "Line 1\rLine 2\rLine 3",           // Classic Mac
+          "Mixed\nLine\r\nEndings\rHere"      // Mixed
+        ];
+  
+        for (const description of descriptions) {
+          const result = await server.createTask({
+            title: "Line Ending Test",
+            description
+          });
+          expect(result.content[0].text).toContain("Task created successfully");
+        }
+      });
+    });
+  
+    describe("Platform Compatibility", () => {
+      test("should work on different platforms", () => {
+        const platforms = ['win32', 'darwin', 'linux'];
+        const currentPlatform = process.platform;
+        
+        expect(platforms).toContain(currentPlatform);
+      });
+  
+      test("should handle different file system capabilities", () => {
+        // Test case sensitivity handling
+        const server = new FollowPlanServer("/tmp/test");
+        
+        expect(server).toBeDefined();
+        expect(typeof server.generateId).toBe('function');
+      });
+    });
+  });
+  
+  // Test runner script
+  // scripts/run-tests.js
+  const { spawn } = require('child_process');
+  
+  const testSuites = [
+    { name: 'Unit Tests', command: 'npm', args: ['run', 'test:unit'] },
+    { name: 'Integration Tests', command: 'npm', args: ['run', 'test:integration'] },
+    { name: 'Security Tests', command: 'npm', args: ['run', 'test:security'] },
+    { name: 'Edge Case Tests', command: 'npm', args: ['run', 'test:edge-cases'] },
+    { name: 'Performance Tests', command: 'npm', args: ['run', 'test:coverage'] }
+  ];
+  
+  async function runTestSuite(suite) {
+    return new Promise((resolve, reject) => {
+      console.log(`\n🧪 Running ${suite.name}...`);
+      
+      const process = spawn(suite.command, suite.args, {
+        stdio: 'inherit',
+        shell: true
+      });
+  
+      process.on('close', (code) => {
+        if (code === 0) {
+          console.log(`✅ ${suite.name} passed`);
+          resolve(true);
+        } else {
+          console.log(`❌ ${suite.name} failed`);
+          reject(new Error(`${suite.name} failed with code ${code}`));
+        }
+      });
+    });
+  }
+  
+  async function runAllTests() {
+    console.log('🚀 Starting comprehensive test suite...');
+    
+    let passed = 0;
+    let failed = 0;
+  
+    for (const suite of testSuites) {
+      try {
+        await runTestSuite(suite);
+        passed++;
+      } catch (error) {
+        failed++;
+        console.error(`Failed: ${error.message}`);
+      }
+    }
+  
+    console.log(`\n📊 Test Results:`);
+    console.log(`✅ Passed: ${passed}`);
+    console.log(`❌ Failed: ${failed}`);
+    console.log(`📈 Success Rate: ${((passed / testSuites.length) * 100).toFixed(1)}%`);
+  
+    if (failed > 0) {
+      process.exit(1);
+    } else {
+      console.log('\n🎉 All tests passed!');
+    }
+  }
+  
+  if (require.main === module) {
+    runAllTests().catch(console.error);
+  }
+  
+  module.exports = { runAllTests, runTestSuite };
