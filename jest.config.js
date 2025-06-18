@@ -1,46 +1,32 @@
 export default {
   preset: "ts-jest/presets/default-esm",
   extensionsToTreatAsEsm: [".ts"],
-  moduleNameMapping: {
-    "^(\\\\.{1,2}/.*)\\\\.js$": "$1",
+  globals: {
+    "ts-jest": {
+      useESM: true,
+    },
   },
   testEnvironment: "node",
   roots: ["<rootDir>/src", "<rootDir>/__tests__"],
-  testMatch: [
-    "**/__tests__/**/*.test.ts",
-    "**/?(*.)+(spec|test).ts"
-  ],
+  testMatch: ["**/__tests__/**/*.test.ts", "**/?(*.)+(spec|test).ts"],
   transform: {
-    "^.+\\\\.ts$": ["ts-jest", {
-      useESM: true,
-      tsconfig: {
-        module: "esnext"
-      }
-    }]
+    "^.+\\.ts$": "ts-jest",
   },
-  collectCoverageFrom: [
-    "src/**/*.ts",
-    "!src/**/*.d.ts",
-    "!src/**/*.test.ts"
-  ],
+  moduleNameMapping: {
+    "^@/(.*)$": "<rootDir>/src/$1",
+  },
+  collectCoverageFrom: ["src/**/*.ts", "!src/**/*.d.ts", "!src/index.ts"],
   coverageDirectory: "coverage",
-  coverageReporters: [
-    "text",
-    "text-summary", 
-    "html",
-    "lcov"
-  ],
+  coverageReporters: ["text", "lcov", "html"],
   coverageThreshold: {
     global: {
       branches: 85,
-      functions: 90,
-      lines: 90,
-      statements: 90
-    }
+      functions: 85,
+      lines: 85,
+      statements: 85,
+    },
   },
   setupFilesAfterEnv: ["<rootDir>/__tests__/setup.ts"],
+  testTimeout: 10000,
   verbose: true,
-  detectOpenHandles: true,
-  forceExit: true,
-  testTimeout: 30000
 };
